@@ -62,13 +62,21 @@ st.markdown("""
 # 2. KONEKSI & LOAD MODEL
 # ==========================================
 def init_connection():
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception:
-        return None
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    
+    # Cek apakah kita sedang berjalan di Streamlit Cloud (menggunakan Secrets)
+    if "gcp_service_account" in st.secrets:
+        # Buat kredensial dari Secrets
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    else:
+        # Jika di komputer lokal, pakai file json
+        try:
+            creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+        except FileNotFoundError:
+            return None
+            
+    client = gspread.authorize(creds)
+    return client
 
 @st.cache_resource
 def load_model():
