@@ -180,7 +180,7 @@ if submitted:
                     row_data.append(input_user[col])
                 row_data.append(hasil_divisi)
                 sheet.append_row(row_data)
-                st.success("Data berhasil disimpan ke Database Online.")
+                st.success("Terima kasih! Data Anda telah berhasil tercatat.")
             else:
                 st.error("Gagal koneksi ke Google Cloud. Cek file credentials.json.")
         
