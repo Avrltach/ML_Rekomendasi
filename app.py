@@ -10,8 +10,6 @@ st.set_page_config(page_title="Rekomendasi Divisi Pramuka", layout="wide")
 st.markdown("""
 <style>
     .main { background-color: #f0f2f6; }
-
-    /* Judul halaman — hanya tag h1 di luar result-box */
     .page-title {
         color: #1E5128;
         font-family: 'Segoe UI', sans-serif;
@@ -21,9 +19,7 @@ st.markdown("""
         border-bottom: 3px solid #1E5128;
         margin-bottom: 20px;
     }
-    .section-title { color: #1E5128; }
-
-    /* Tombol */
+    .section-title { color: #1E5128; font-weight: 600; }
     .stButton>button {
         background-color: #1E5128;
         color: white;
@@ -34,14 +30,10 @@ st.markdown("""
         width: 100%;
         border: none;
     }
-    .stButton>button:hover {
-        background-color: #3E7C17;
-    }
-
-    /* Result box — gunakan class khusus, bukan override h1/h3 global */
+    .stButton>button:hover { background-color: #3E7C17; }
     .result-box {
         background-color: #D8E9A8;
-        padding: 20px;
+        padding: 24px;
         border-radius: 10px;
         border-left: 5px solid #1E5128;
         margin-top: 20px;
@@ -57,14 +49,13 @@ st.markdown("""
         color: #1E5128;
         font-size: 2rem;
         font-weight: 700;
-        margin: 4px 0;
+        margin: 4px 0 8px 0;
     }
     .result-desc {
         text-align: center;
         color: #333;
         font-size: 0.95rem;
     }
-
     footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -99,7 +90,14 @@ def init_connection():
 def load_model():
     try:
         with open("model_artifacts.pkl", "rb") as f:
-            return pickle.load(f)
+            data = pickle.load(f)
+        # Validasi isi
+        required = ['model', 'encoders', 'fitur_kolom', 'target_col']
+        missing  = [k for k in required if k not in data]
+        if missing:
+            st.error(f"Artifacts tidak lengkap, kunci hilang: {missing}")
+            return None
+        return data
     except FileNotFoundError:
         return None
     except Exception as e:
@@ -108,35 +106,47 @@ def load_model():
 
 artifacts = load_model()
 if artifacts is None:
-    st.error("File model_artifacts.pkl tidak ditemukan. Jalankan notebook training terlebih dahulu.")
+    st.error("❌ File model_artifacts.pkl tidak ditemukan atau tidak valid. Jalankan notebook training terlebih dahulu.")
     st.stop()
 
-# Validasi kunci artifacts
-required_keys = ['model', 'encoders', 'fitur_kolom', 'target_col']
-missing = [k for k in required_keys if k not in artifacts]
-if missing:
-    st.error(f"Artifacts tidak lengkap. Kunci yang hilang: {missing}")
-    st.stop()
-
-model      = artifacts['model']
-encoders   = artifacts['encoders']
+model       = artifacts['model']
+encoders    = artifacts['encoders']
 fitur_kolom = artifacts['fitur_kolom']
-target_col = artifacts['target_col']
+target_col  = artifacts['target_col']
+
+
+# ── Helper: encode aman → selalu return int ──────────────────────
+def safe_encode(encoder, value):
+    val_str = str(value).strip()
+    if val_str in encoder.classes_:
+        return int(encoder.transform([val_str])[0])
+    return 0
+
+
+# ── Nilai Status valid dari encoder ─────────────────────────────
+if 'Status' in encoders:
+    status_classes = encoders['Status'].classes_.tolist()
+    default_status = next(
+        (s for s in status_classes if 'dewan' in s.lower()),
+        status_classes[0]
+    )
+else:
+    default_status = None
 
 
 # ── Header ───────────────────────────────────────────────────────
-st.markdown('<p class="page-title">Sistem Rekomendasi Divisi Pramuka</p>', unsafe_allow_html=True)
+st.markdown('<p class="page-title">🌿 Sistem Rekomendasi Divisi Pramuka</p>', unsafe_allow_html=True)
 st.markdown("""
 Selamat datang di sistem penentuan divisi berbasis **Machine Learning**.  
 Sistem ini akan menganalisis minat dan bakat Anda untuk merekomendasikan divisi yang paling tepat.
 """)
 
-with st.expander("Petunjuk Pengisian"):
+with st.expander("📋 Petunjuk Pengisian"):
     st.markdown("""
     1. Isi **Nama Lengkap** dan **Kelas** dengan benar.
-    2. Status otomatis terisi **Calon Dewan**.
-    3. Jawab pertanyaan kuesioner pada skala 1–5.
-    4. Tekan tombol **Proses Rekomendasi** di bawah.
+    2. Kolom **Status** terisi otomatis.
+    3. Jawab setiap pertanyaan kuesioner pada skala **1–5**.
+    4. Tekan tombol **PROSES REKOMENDASI** di bawah.
     """)
 
 st.markdown("---")
@@ -150,10 +160,10 @@ with st.form("form_rekomendasi"):
     with col2:
         kelas = st.text_input("Kelas", placeholder="Contoh: X.1")
     with col3:
-        st.text_input("Status", value="Calon Dewan", disabled=True)
+        status_display = default_status if default_status else "Calon Dewan"
+        st.text_input("Status", value=status_display, disabled=True)
 
-    st.markdown('<p class="section-title"><strong>Kuesioner Minat & Bakat</strong></p>',
-                unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Kuesioner Minat & Bakat</p>', unsafe_allow_html=True)
     st.caption("Skala 1 (Sangat Tidak Setuju) hingga 5 (Sangat Setuju)")
 
     col_kiri, col_kanan = st.columns(2)
@@ -163,7 +173,7 @@ with st.form("form_rekomendasi"):
         target_form = col_kiri if i % 2 == 0 else col_kanan
         with target_form:
             if col == 'Status':
-                input_user[col] = "Calon Dewan"
+                input_user[col] = default_status if default_status else "Calon Dewan"
             elif col in encoders:
                 options = encoders[col].classes_.tolist()
                 input_user[col] = st.selectbox(col, options)
@@ -177,24 +187,34 @@ with st.form("form_rekomendasi"):
 # ── Prediksi ─────────────────────────────────────────────────────
 if submitted:
     if not nama.strip() or not kelas.strip():
-        st.warning("Nama dan Kelas wajib diisi.")
+        st.warning("⚠️ Nama dan Kelas wajib diisi.")
     else:
-        # Buat dataframe input
-        df_input = pd.DataFrame([input_user])[fitur_kolom]
+        # Encode semua input → pastikan semua nilai numerik
+        row = {}
+        for col in fitur_kolom:
+            val = input_user[col]
+            if col in encoders:
+                row[col] = safe_encode(encoders[col], val)
+            else:
+                row[col] = int(val)
 
-        # Encode kolom kategorikal
-        for col in df_input.columns:
-            if col == 'Status':
-                if col in encoders:
-                    # Tampilkan pilihan sesuai data training, disabled
-                    options = encoders[col].classes_.tolist()
-                    input_user[col] = st.selectbox("Status", options, disabled=True)
-                else:
-                    input_user[col] = "Calon Dewan"
+        # DataFrame dengan dtype float64 eksplisit
+        df_input = pd.DataFrame([row], columns=fitur_kolom).astype(np.float64)
+
+        # Kirim sebagai numpy array — hindari kemungkinan issue DataFrame vs array
+        X_input = np.array(df_input.values, dtype=np.float64)
 
         # Prediksi
-        pred         = model.predict(df_input)[0]
-        hasil_divisi = encoders[target_col].inverse_transform([pred])[0]
+        try:
+            pred         = model.predict(X_input)[0]
+            hasil_divisi = encoders[target_col].inverse_transform([int(pred)])[0]
+        except Exception as e:
+            st.error(f"Gagal melakukan prediksi: {e}")
+            # Tampilkan detail untuk debug
+            st.write("Shape input:", X_input.shape)
+            st.write("Dtype input:", X_input.dtype)
+            st.write("Nilai input:", X_input)
+            st.stop()
 
         # Tampilkan hasil
         st.markdown("---")
@@ -214,7 +234,7 @@ if submitted:
                 sheet    = client.open_by_key(SPREADSHEET_ID).sheet1
                 row_data = [nama, kelas] + [input_user[col] for col in fitur_kolom] + [hasil_divisi]
                 sheet.append_row(row_data)
-                st.success("Data Anda berhasil tersimpan.")
+                st.success("✅ Data Anda berhasil tersimpan.")
         except gspread.exceptions.SpreadsheetNotFound:
             st.error("Spreadsheet tidak ditemukan. Pastikan SPREADSHEET_ID sudah benar dan sudah di-share ke service account.")
         except gspread.exceptions.APIError as e:
