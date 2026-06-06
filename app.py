@@ -6,26 +6,24 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Rekomendasi Divisi Pramuka", layout="wide")
+
 st.markdown("""
 <style>
-    /* Background utama */
-    .main {
-        background-color: #f0f2f6;
-    }
-    /* Judul Utama */
-    h1 {
+    .main { background-color: #f0f2f6; }
+
+    /* Judul halaman — hanya tag h1 di luar result-box */
+    .page-title {
         color: #1E5128;
         font-family: 'Segoe UI', sans-serif;
         font-weight: 700;
+        font-size: 2rem;
         padding-bottom: 10px;
         border-bottom: 3px solid #1E5128;
         margin-bottom: 20px;
     }
-    /* Sub Judul Form */
-    h3 {
-        color: #1E5128;
-    }
-    /* Tombol Proses */
+    .section-title { color: #1E5128; }
+
+    /* Tombol */
     .stButton>button {
         background-color: #1E5128;
         color: white;
@@ -34,60 +32,102 @@ st.markdown("""
         padding: 10px 24px;
         border-radius: 8px;
         width: 100%;
+        border: none;
     }
     .stButton>button:hover {
         background-color: #3E7C17;
-        border-color: #3E7C17;
     }
-    /* Box Hasil */
+
+    /* Result box — gunakan class khusus, bukan override h1/h3 global */
     .result-box {
         background-color: #D8E9A8;
         padding: 20px;
         border-radius: 10px;
         border-left: 5px solid #1E5128;
         margin-top: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    /* Sembunyikan Footer Streamlit */
-    footer {visibility: hidden;}
+    .result-label {
+        text-align: center;
+        color: #555;
+        font-size: 1rem;
+        margin-bottom: 4px;
+    }
+    .result-divisi {
+        text-align: center;
+        color: #1E5128;
+        font-size: 2rem;
+        font-weight: 700;
+        margin: 4px 0;
+    }
+    .result-desc {
+        text-align: center;
+        color: #333;
+        font-size: 0.95rem;
+    }
+
+    footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-def init_connection():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    
-    if "gcp_service_account" in st.secrets:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    else:
-        try:
-            creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
-        except FileNotFoundError:
-            return None
-            
-    client = gspread.authorize(creds)
-    return client
 
+# ── Koneksi Google Sheets ────────────────────────────────────────
+def init_connection():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    try:
+        if "gcp_service_account" in st.secrets:
+            creds = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"], scopes=scopes
+            )
+        else:
+            creds = Credentials.from_service_account_file(
+                "credentials.json", scopes=scopes
+            )
+        return gspread.authorize(creds)
+    except FileNotFoundError:
+        st.error("File credentials.json tidak ditemukan.")
+        return None
+    except Exception as e:
+        st.error(f"Gagal autentikasi Google: {e}")
+        return None
+
+
+# ── Load Model ───────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
     try:
         with open("model_artifacts.pkl", "rb") as f:
             return pickle.load(f)
-    except:
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        st.error(f"Error memuat model: {e}")
         return None
 
 artifacts = load_model()
 if artifacts is None:
-    st.error("File model tidak ditemukan. Jalankan Training Notebook terlebih dahulu.")
+    st.error("File model_artifacts.pkl tidak ditemukan. Jalankan notebook training terlebih dahulu.")
     st.stop()
 
-model = artifacts['model']
-encoders = artifacts['encoders']
+# Validasi kunci artifacts
+required_keys = ['model', 'encoders', 'fitur_kolom', 'target_col']
+missing = [k for k in required_keys if k not in artifacts]
+if missing:
+    st.error(f"Artifacts tidak lengkap. Kunci yang hilang: {missing}")
+    st.stop()
+
+model      = artifacts['model']
+encoders   = artifacts['encoders']
 fitur_kolom = artifacts['fitur_kolom']
 target_col = artifacts['target_col']
 
-st.title("Sistem Rekomendasi Divisi Organisasi")
+
+# ── Header ───────────────────────────────────────────────────────
+st.markdown('<p class="page-title">Sistem Rekomendasi Divisi Pramuka</p>', unsafe_allow_html=True)
 st.markdown("""
-Selamat datang di sistem penentuan divisi berbasis **Machine Learning**. 
+Selamat datang di sistem penentuan divisi berbasis **Machine Learning**.  
 Sistem ini akan menganalisis minat dan bakat Anda untuk merekomendasikan divisi yang paling tepat.
 """)
 
@@ -95,85 +135,88 @@ with st.expander("Petunjuk Pengisian"):
     st.markdown("""
     1. Isi **Nama Lengkap** dan **Kelas** dengan benar.
     2. Status otomatis terisi **Calon Dewan**.
-    3. Jawab pertanyaan kuesioner pada skala 1 - 5.
+    3. Jawab pertanyaan kuesioner pada skala 1–5.
     4. Tekan tombol **Proses Rekomendasi** di bawah.
     """)
 
 st.markdown("---")
 
+
+# ── Form ─────────────────────────────────────────────────────────
 with st.form("form_rekomendasi"):
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        nama = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap...")
+        nama  = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap...")
     with col2:
         kelas = st.text_input("Kelas", placeholder="Contoh: X.1")
     with col3:
         st.text_input("Status", value="Calon Dewan", disabled=True)
 
-    st.markdown("### Kuesioner Minat & Bakat")
+    st.markdown('<p class="section-title"><strong>Kuesioner Minat & Bakat</strong></p>',
+                unsafe_allow_html=True)
     st.caption("Skala 1 (Sangat Tidak Setuju) hingga 5 (Sangat Setuju)")
 
     col_kiri, col_kanan = st.columns(2)
-    
     input_user = {}
-    index = 0
-    
-    for col in fitur_kolom:
-        target_form = col_kiri if index % 2 == 0 else col_kanan
-        
+
+    for i, col in enumerate(fitur_kolom):
+        target_form = col_kiri if i % 2 == 0 else col_kanan
         with target_form:
             if col == 'Status':
-                input_user[col] = "Calon Dewan"            
+                input_user[col] = "Calon Dewan"
             elif col in encoders:
                 options = encoders[col].classes_.tolist()
-                input_user[col] = st.selectbox(f"{col}", options)            
+                input_user[col] = st.selectbox(col, options)
             else:
-                input_user[col] = st.slider(f"{col}", 1, 5, 3)
-        index += 1
-    st.markdown("") 
+                input_user[col] = st.slider(col, 1, 5, 3)
+
+    st.markdown("")
     submitted = st.form_submit_button("PROSES REKOMENDASI")
 
+
+# ── Prediksi ─────────────────────────────────────────────────────
 if submitted:
-    if not nama or not kelas:
+    if not nama.strip() or not kelas.strip():
         st.warning("Nama dan Kelas wajib diisi.")
     else:
-        df_input = pd.DataFrame([input_user])
-        df_input = df_input[fitur_kolom]
+        # Buat dataframe input
+        df_input = pd.DataFrame([input_user])[fitur_kolom]
 
+        # Encode kolom kategorikal
         for col in df_input.columns:
             if col in encoders:
                 try:
-                    df_input[col] = encoders[col].transform(df_input[col])
-                except:
-                    df_input[col] = 0
+                    df_input[col] = encoders[col].transform(df_input[col].astype(str))
+                except ValueError as e:
+                    st.error(f"Nilai tidak dikenali pada kolom '{col}': {e}")
+                    st.stop()
 
-        pred = model.predict(df_input)[0]
+        # Prediksi
+        pred         = model.predict(df_input)[0]
         hasil_divisi = encoders[target_col].inverse_transform([pred])[0]
 
+        # Tampilkan hasil
         st.markdown("---")
         st.markdown(f"""
         <div class="result-box">
-            <h3 style="text-align:center; margin-bottom:5px;">Rekomendasi Divisi</h3>
-            <h1 style="text-align:center; color:#1E5128; margin-top:0px;">{hasil_divisi}</h1>
-            <p style="text-align:center;">{nama} ({kelas}) direkomendasikan untuk bergabung di divisi ini.</p>
+            <p class="result-label">Rekomendasi Divisi untuk Anda</p>
+            <p class="result-divisi">{hasil_divisi}</p>
+            <p class="result-desc">{nama} ({kelas}) direkomendasikan untuk bergabung di divisi ini.</p>
         </div>
         """, unsafe_allow_html=True)
+
+        # Simpan ke Google Sheets
         try:
             client = init_connection()
             if client:
                 SPREADSHEET_ID = '1DS2XgPwtqnCV7wOAumq02X4IdbkiZ5abS5df2x28D88'
-                sheet = client.open_by_key(SPREADSHEET_ID).sheet1                
-                row_data = [nama, kelas]                
-                for col in fitur_kolom:
-                    row_data.append(input_user[col])
-                row_data.append(hasil_divisi)
+                sheet    = client.open_by_key(SPREADSHEET_ID).sheet1
+                row_data = [nama, kelas] + [input_user[col] for col in fitur_kolom] + [hasil_divisi]
                 sheet.append_row(row_data)
-                st.success("Terima kasih! Data Anda telah berhasil tercatat.")
-            else:
-                st.error("Gagal koneksi ke Google Cloud. Cek file credentials.json.")
-        
+                st.success("Data Anda berhasil tersimpan.")
         except gspread.exceptions.SpreadsheetNotFound:
-            st.error("Spreadsheet tidak ditemukan. Pastikan ID sudah benar.")
+            st.error("Spreadsheet tidak ditemukan. Pastikan SPREADSHEET_ID sudah benar dan sudah di-share ke service account.")
+        except gspread.exceptions.APIError as e:
+            st.error(f"Google Sheets API error: {e}")
         except Exception as e:
-            st.error(f"Terjadi error: {e}")
+            st.error(f"Terjadi error saat menyimpan data: {e}")
