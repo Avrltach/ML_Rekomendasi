@@ -184,12 +184,13 @@ if submitted:
 
         # Encode kolom kategorikal
         for col in df_input.columns:
-            if col in encoders:
-                try:
-                    df_input[col] = encoders[col].transform(df_input[col].astype(str))
-                except ValueError as e:
-                    st.error(f"Nilai tidak dikenali pada kolom '{col}': {e}")
-                    st.stop()
+            if col == 'Status':
+                if col in encoders:
+                    # Tampilkan pilihan sesuai data training, disabled
+                    options = encoders[col].classes_.tolist()
+                    input_user[col] = st.selectbox("Status", options, disabled=True)
+                else:
+                    input_user[col] = "Calon Dewan"
 
         # Prediksi
         pred         = model.predict(df_input)[0]
