@@ -3,8 +3,8 @@ pandas
 numpy
 scikit-learn
 xgboost
-imbalanced-learn
+joblib
 gspread
 google-auth
+imbalanced-learn
 openpyxl
-pickle5
