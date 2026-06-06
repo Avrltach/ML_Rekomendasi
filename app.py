@@ -1,243 +1,175 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
+import joblib # Diubah dari pickle ke joblib
+import xgboost # Wajib import ini
 import gspread
 from google.oauth2.service_account import Credentials
 
+# ==========================================
+# 1. KONFIGURASI TAMPILAN
+# ==========================================
 st.set_page_config(page_title="Rekomendasi Divisi Pramuka", layout="wide")
 
 st.markdown("""
 <style>
     .main { background-color: #f0f2f6; }
-    .page-title {
-        color: #1E5128;
-        font-family: 'Segoe UI', sans-serif;
-        font-weight: 700;
-        font-size: 2rem;
-        padding-bottom: 10px;
-        border-bottom: 3px solid #1E5128;
-        margin-bottom: 20px;
-    }
-    .section-title { color: #1E5128; font-weight: 600; }
-    .stButton>button {
-        background-color: #1E5128;
-        color: white;
-        font-size: 18px;
-        font-weight: bold;
-        padding: 10px 24px;
-        border-radius: 8px;
-        width: 100%;
-        border: none;
-    }
-    .stButton>button:hover { background-color: #3E7C17; }
-    .result-box {
-        background-color: #D8E9A8;
-        padding: 24px;
-        border-radius: 10px;
-        border-left: 5px solid #1E5128;
-        margin-top: 20px;
-    }
-    .result-label {
-        text-align: center;
-        color: #555;
-        font-size: 1rem;
-        margin-bottom: 4px;
-    }
-    .result-divisi {
-        text-align: center;
-        color: #1E5128;
-        font-size: 2rem;
-        font-weight: 700;
-        margin: 4px 0 8px 0;
-    }
-    .result-desc {
-        text-align: center;
-        color: #333;
-        font-size: 0.95rem;
-    }
-    footer { visibility: hidden; }
+    h1 { color: #1E5128; font-family: 'Segoe UI', sans-serif; font-weight: 700; padding-bottom: 10px; border-bottom: 3px solid #1E5128; margin-bottom: 20px; }
+    h3 { color: #1E5128; }
+    .stButton>button { background-color: #1E5128; color: white; font-size: 18px; font-weight: bold; padding: 10px 24px; border-radius: 8px; width: 100%; }
+    .stButton>button:hover { background-color: #3E7C17; border-color: #3E7C17; }
+    .result-box { background-color: #D8E9A8; padding: 20px; border-radius: 10px; border-left: 5px solid #1E5128; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-
-# ── Koneksi Google Sheets ────────────────────────────────────────
+# ==========================================
+# 2. KONEKSI & LOAD MODEL
+# ==========================================
 def init_connection():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds = Credentials.from_service_account_info(
-                st.secrets["gcp_service_account"], scopes=scopes
-            )
-        else:
-            creds = Credentials.from_service_account_file(
-                "credentials.json", scopes=scopes
-            )
-        return gspread.authorize(creds)
-    except FileNotFoundError:
-        st.error("File credentials.json tidak ditemukan.")
-        return None
-    except Exception as e:
-        st.error(f"Gagal autentikasi Google: {e}")
-        return None
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    
+    if "gcp_service_account" in st.secrets:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    else:
+        try:
+            creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+        except FileNotFoundError:
+            return None
+            
+    client = gspread.authorize(creds)
+    return client
 
-
-# ── Load Model ───────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
     try:
-        with open("model_artifacts.pkl", "rb") as f:
-            data = pickle.load(f)
-        # Validasi isi
-        required = ['model', 'encoders', 'fitur_kolom', 'target_col']
-        missing  = [k for k in required if k not in data]
-        if missing:
-            st.error(f"Artifacts tidak lengkap, kunci hilang: {missing}")
-            return None
-        return data
-    except FileNotFoundError:
-        return None
-    except Exception as e:
-        st.error(f"Error memuat model: {e}")
+        # Menggunakan joblib.load sesuai format save tadi
+        return joblib.load("model_artifacts.pkl")
+    except:
         return None
 
 artifacts = load_model()
 if artifacts is None:
-    st.error("❌ File model_artifacts.pkl tidak ditemukan atau tidak valid. Jalankan notebook training terlebih dahulu.")
+    st.error("File model tidak ditemukan. Jalankan Training Notebook terlebih dahulu.")
     st.stop()
 
-model       = artifacts['model']
-encoders    = artifacts['encoders']
-fitur_kolom = artifacts['fitur_kolom']
-target_col  = artifacts['target_col']
+model = artifacts['model']
+encoders = artifacts['encoders']
+feature_cols = artifacts['feature_cols'] # Mengambil urutan fitur
+target_col = artifacts['target_col']
 
-
-# ── Helper: encode aman → selalu return int ──────────────────────
-def safe_encode(encoder, value):
-    val_str = str(value).strip()
-    if val_str in encoder.classes_:
-        return int(encoder.transform([val_str])[0])
-    return 0
-
-
-# ── Nilai Status valid dari encoder ─────────────────────────────
-if 'Status' in encoders:
-    status_classes = encoders['Status'].classes_.tolist()
-    default_status = next(
-        (s for s in status_classes if 'dewan' in s.lower()),
-        status_classes[0]
-    )
-else:
-    default_status = None
-
-
-# ── Header ───────────────────────────────────────────────────────
-st.markdown('<p class="page-title">🌿 Sistem Rekomendasi Divisi Pramuka</p>', unsafe_allow_html=True)
+# ==========================================
+# 3. TAMPILAN UTAMA
+# ==========================================
+st.title("Sistem Rekomendasi Divisi Organisasi")
 st.markdown("""
-Selamat datang di sistem penentuan divisi berbasis **Machine Learning**.  
+Selamat datang di sistem penentuan divisi berbasis **Machine Learning (XGBoost)**. 
 Sistem ini akan menganalisis minat dan bakat Anda untuk merekomendasikan divisi yang paling tepat.
 """)
 
-with st.expander("📋 Petunjuk Pengisian"):
+with st.expander("Petunjuk Pengisian"):
     st.markdown("""
     1. Isi **Nama Lengkap** dan **Kelas** dengan benar.
-    2. Kolom **Status** terisi otomatis.
-    3. Jawab setiap pertanyaan kuesioner pada skala **1–5**.
-    4. Tekan tombol **PROSES REKOMENDASI** di bawah.
+    2. Status otomatis terisi **Calon Dewan**.
+    3. Jawab pertanyaan kuesioner pada skala 1 - 5.
+    4. Tekan tombol **Proses Rekomendasi** di bawah.
     """)
 
 st.markdown("---")
 
-
-# ── Form ─────────────────────────────────────────────────────────
+# ==========================================
+# 4. FORM INPUT
+# ==========================================
 with st.form("form_rekomendasi"):
     col1, col2, col3 = st.columns(3)
+    
     with col1:
-        nama  = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap...")
+        nama = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap...")
     with col2:
         kelas = st.text_input("Kelas", placeholder="Contoh: X.1")
     with col3:
-        status_display = default_status if default_status else "Calon Dewan"
-        st.text_input("Status", value=status_display, disabled=True)
+        st.text_input("Status", value="Calon Dewan", disabled=True)
 
-    st.markdown('<p class="section-title">Kuesioner Minat & Bakat</p>', unsafe_allow_html=True)
+    st.markdown("### Kuesioner Minat & Bakat")
     st.caption("Skala 1 (Sangat Tidak Setuju) hingga 5 (Sangat Setuju)")
 
     col_kiri, col_kanan = st.columns(2)
+    
     input_user = {}
-
-    for i, col in enumerate(fitur_kolom):
-        target_form = col_kiri if i % 2 == 0 else col_kanan
+    index = 0
+    
+    # Loop sesuai feature_cols yang tersimpan di model
+    for col in feature_cols:
+        target_form = col_kiri if index % 2 == 0 else col_kanan
+        
         with target_form:
+            # Handle Status manual (karena di form sudah ada, tapi model butuh input ini)
             if col == 'Status':
-                input_user[col] = default_status if default_status else "Calon Dewan"
+                input_user[col] = "Calon Dewan" # Hardcoded sesuai permintaan
             elif col in encoders:
                 options = encoders[col].classes_.tolist()
-                input_user[col] = st.selectbox(col, options)
+                input_user[col] = st.selectbox(f"{col}", options)            
             else:
-                input_user[col] = st.slider(col, 1, 5, 3)
-
-    st.markdown("")
+                input_user[col] = st.slider(f"{col}", 1, 5, 3)
+        index += 1
+        
+    st.markdown("") 
     submitted = st.form_submit_button("PROSES REKOMENDASI")
 
-
-# ── Prediksi ─────────────────────────────────────────────────────
+# ==========================================
+# 5. LOGIKA PREDIKSI (XGBoost - TANPA SCALER)
+# ==========================================
 if submitted:
-    if not nama.strip() or not kelas.strip():
-        st.warning("⚠️ Nama dan Kelas wajib diisi.")
+    if not nama or not kelas:
+        st.warning("Nama dan Kelas wajib diisi.")
     else:
-        # Encode semua input → pastikan semua nilai numerik
-        row = {}
-        for col in fitur_kolom:
-            val = input_user[col]
+        # 1. Buat DataFrame
+        df_input = pd.DataFrame([input_user])
+        
+        # 2. Pastikan urutan kolom SAMA PERSIS dengan saat training
+        df_input = df_input[feature_cols]
+
+        # 3. Encoding (Khusus kolom kategorikal)
+        for col in df_input.columns:
             if col in encoders:
-                row[col] = safe_encode(encoders[col], val)
-            else:
-                row[col] = int(val)
+                try:
+                    df_input[col] = encoders[col].transform(df_input[col])
+                except ValueError:
+                    # Handle jika ada nilai baru yang tidak ada di training
+                    df_input[col] = 0
 
-        # DataFrame dengan dtype float64 eksplisit
-        df_input = pd.DataFrame([row], columns=fitur_kolom).astype(np.float64)
+        # 4. Prediksi
+        # PERHATIAN: Tidak ada proses Scaling di sini karena training tidak pakai scaler
+        pred = model.predict(df_input.values)[0]
+        hasil_divisi = encoders[target_col].inverse_transform([pred])[0]
 
-        # Kirim sebagai numpy array — hindari kemungkinan issue DataFrame vs array
-        X_input = np.array(df_input.values, dtype=np.float64)
-
-        # Prediksi
-        try:
-            pred         = model.predict(X_input)[0]
-            hasil_divisi = encoders[target_col].inverse_transform([int(pred)])[0]
-        except Exception as e:
-            st.error(f"Gagal melakukan prediksi: {e}")
-            # Tampilkan detail untuk debug
-            st.write("Shape input:", X_input.shape)
-            st.write("Dtype input:", X_input.dtype)
-            st.write("Nilai input:", X_input)
-            st.stop()
-
-        # Tampilkan hasil
+        # TAMPILKAN HASIL
         st.markdown("---")
         st.markdown(f"""
         <div class="result-box">
-            <p class="result-label">Rekomendasi Divisi untuk Anda</p>
-            <p class="result-divisi">{hasil_divisi}</p>
-            <p class="result-desc">{nama} ({kelas}) direkomendasikan untuk bergabung di divisi ini.</p>
+            <h3 style="text-align:center; margin-bottom:5px;">Rekomendasi Divisi</h3>
+            <h1 style="text-align:center; color:#1E5128; margin-top:0px;">{hasil_divisi}</h1>
+            <p style="text-align:center;">{nama} ({kelas}) direkomendasikan untuk bergabung di divisi ini.</p>
         </div>
         """, unsafe_allow_html=True)
-
-        # Simpan ke Google Sheets
+        
+        # 5. Simpan ke Google Sheets
         try:
             client = init_connection()
             if client:
-                SPREADSHEET_ID = '1DS2XgPwtqnCV7wOAumq02X4IdbkiZ5abS5df2x28D88'
-                sheet    = client.open_by_key(SPREADSHEET_ID).sheet1
-                row_data = [nama, kelas] + [input_user[col] for col in fitur_kolom] + [hasil_divisi]
+                SPREADSHEET_ID = '1DS2XgPwtqnCV7wOAumq02X4IdbkiZ5abS5df2x28D88' # Ganti dengan ID Anda
+                sheet = client.open_by_key(SPREADSHEET_ID).sheet1                
+                
+                row_data = [nama, kelas]
+                # Ambil nilai asli dari input_user (sebelum encoding) untuk disimpan ke sheets
+                for col in feature_cols:
+                    row_data.append(input_user[col])
+                row_data.append(hasil_divisi)
+                
                 sheet.append_row(row_data)
-                st.success("✅ Data Anda berhasil tersimpan.")
-        except gspread.exceptions.SpreadsheetNotFound:
-            st.error("Spreadsheet tidak ditemukan. Pastikan SPREADSHEET_ID sudah benar dan sudah di-share ke service account.")
-        except gspread.exceptions.APIError as e:
-            st.error(f"Google Sheets API error: {e}")
+                st.success("Terima kasih! Data Anda telah berhasil tercatat.")
+            else:
+                st.error("Gagal koneksi ke Google Cloud.")
+        
         except Exception as e:
-            st.error(f"Terjadi error saat menyimpan data: {e}")
+            st.error(f"Terjadi error: {e}")
