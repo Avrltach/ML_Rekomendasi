@@ -5,12 +5,7 @@ import pickle
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ==========================================
-# 1. KONFIGURASI TAMPILAN (CSS CUSTOM)
-# ==========================================
 st.set_page_config(page_title="Rekomendasi Divisi Pramuka", layout="wide")
-
-# CSS untuk tampilan yang lebih premium dan bersih
 st.markdown("""
 <style>
     /* Background utama */
@@ -58,18 +53,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 2. KONEKSI & LOAD MODEL
-# ==========================================
 def init_connection():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     
-    # Cek apakah kita sedang berjalan di Streamlit Cloud (menggunakan Secrets)
     if "gcp_service_account" in st.secrets:
-        # Buat kredensial dari Secrets
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
     else:
-        # Jika di komputer lokal, pakai file json
         try:
             creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
         except FileNotFoundError:
